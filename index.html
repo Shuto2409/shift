@@ -1,0 +1,821 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>シフトスケジューラー</title>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<style>
+  :root {
+    --bg: #0f172a;
+    --surface: #1e293b;
+    --surface2: #273549;
+    --border: #334155;
+    --text: #e2e8f0;
+    --text-muted: #94a3b8;
+    --accent: #6366f1;
+    --danger: #ef4444;
+    --success: #22c55e;
+    --row-h: 44px;
+    --header-h: 56px;
+    --label-w: 160px;
+    --grade-header-h: 32px;
+    --hour-w: 72px;
+    --grade4: #818cf8;
+    --grade3: #34d399;
+    --grade2: #fb923c;
+    --grade1: #fbbf24;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: 'Segoe UI', 'Hiragino Sans', sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+  }
+
+  /* ── Setup Modal ── */
+  #setup-overlay {
+    position: fixed; inset: 0; background: rgba(0,0,0,.85);
+    display: flex; align-items: center; justify-content: center;
+    z-index: 1000;
+  }
+  #setup-overlay.hidden { display: none; }
+  .setup-box {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 16px; padding: 36px; width: min(480px, 94vw);
+    box-shadow: 0 24px 64px rgba(0,0,0,.6);
+  }
+  .setup-box h2 { font-size: 1.4rem; margin-bottom: 8px; }
+  .setup-box p { color: var(--text-muted); font-size: .9rem; margin-bottom: 24px; line-height: 1.6; }
+  .setup-box label { display: block; font-size: .85rem; color: var(--text-muted); margin-bottom: 6px; margin-top: 16px; }
+  .setup-box input {
+    width: 100%; background: var(--bg); border: 1px solid var(--border);
+    border-radius: 8px; padding: 10px 14px; color: var(--text);
+    font-size: .9rem; outline: none;
+  }
+  .setup-box input:focus { border-color: var(--accent); }
+  .setup-box .btn-primary {
+    margin-top: 24px; width: 100%; padding: 12px;
+    background: var(--accent); color: #fff; border: none;
+    border-radius: 8px; font-size: 1rem; cursor: pointer;
+    font-weight: 600;
+  }
+  .setup-box .btn-primary:hover { opacity: .9; }
+  .setup-note {
+    margin-top: 16px; font-size: .8rem; color: var(--text-muted);
+    background: rgba(99,102,241,.1); border-radius: 8px; padding: 12px;
+    line-height: 1.6;
+  }
+
+  /* ── Top Bar ── */
+  #topbar {
+    height: var(--header-h); background: var(--surface);
+    border-bottom: 1px solid var(--border);
+    display: flex; align-items: center; gap: 12px; padding: 0 16px;
+    position: sticky; top: 0; z-index: 100; flex-shrink: 0;
+  }
+  #topbar h1 { font-size: 1.1rem; font-weight: 700; margin-right: 8px; white-space: nowrap; }
+  .nav-btn {
+    background: var(--surface2); border: 1px solid var(--border);
+    color: var(--text); padding: 6px 12px; border-radius: 8px;
+    cursor: pointer; font-size: .9rem; white-space: nowrap;
+  }
+  .nav-btn:hover { background: var(--border); }
+  #date-display {
+    font-weight: 600; font-size: 1rem; min-width: 160px; text-align: center;
+  }
+  .today-btn {
+    background: rgba(99,102,241,.2); border: 1px solid var(--accent);
+    color: var(--accent); padding: 6px 14px; border-radius: 8px;
+    cursor: pointer; font-size: .85rem; font-weight: 600;
+  }
+  .today-btn:hover { background: rgba(99,102,241,.3); }
+  .spacer { flex: 1; }
+  .icon-btn {
+    background: var(--surface2); border: 1px solid var(--border);
+    color: var(--text); width: 36px; height: 36px; border-radius: 8px;
+    display: flex; align-items: center; justify-content: center;
+    cursor: pointer; font-size: 1.1rem; flex-shrink: 0;
+  }
+  .icon-btn:hover { background: var(--border); }
+
+  /* ── Main Layout ── */
+  #main {
+    display: flex; flex-direction: column; flex: 1; overflow: hidden;
+  }
+
+  /* ── Gantt Container ── */
+  #gantt-wrapper {
+    flex: 1; overflow: auto; position: relative;
+  }
+  #gantt {
+    display: flex; flex-direction: column;
+    min-width: calc(var(--label-w) + var(--hour-w) * 24);
+  }
+
+  /* ── Time Header ── */
+  #time-header {
+    display: flex; position: sticky; top: 0; z-index: 50;
+    background: var(--bg);
+    border-bottom: 2px solid var(--border);
+  }
+  .time-label-spacer {
+    width: var(--label-w); flex-shrink: 0;
+    border-right: 1px solid var(--border);
+    background: var(--bg);
+  }
+  .time-slots {
+    display: flex; flex: 1;
+  }
+  .time-slot {
+    width: var(--hour-w); flex-shrink: 0;
+    height: 32px; display: flex; align-items: center;
+    justify-content: center; font-size: .75rem;
+    color: var(--text-muted); border-right: 1px solid var(--border);
+    user-select: none;
+  }
+  .time-slot.midnight { color: var(--text); font-weight: 600; }
+
+  /* ── Grade Group ── */
+  .grade-group { display: flex; flex-direction: column; }
+  .grade-header {
+    display: flex; align-items: center;
+    height: var(--grade-header-h);
+    background: var(--surface); position: sticky; top: 32px; z-index: 40;
+    border-bottom: 1px solid var(--border);
+  }
+  .grade-header-label {
+    width: var(--label-w); flex-shrink: 0; padding-left: 16px;
+    font-size: .8rem; font-weight: 700; letter-spacing: .06em;
+    text-transform: uppercase; border-right: 1px solid var(--border);
+  }
+  .grade-header-line {
+    flex: 1; height: 2px; opacity: .3; margin: 0 8px;
+  }
+  .g4 .grade-header-label { color: var(--grade4); }
+  .g3 .grade-header-label { color: var(--grade3); }
+  .g2 .grade-header-label { color: var(--grade2); }
+  .g1 .grade-header-label { color: var(--grade1); }
+  .g4 .grade-header-line { background: var(--grade4); }
+  .g3 .grade-header-line { background: var(--grade3); }
+  .g2 .grade-header-line { background: var(--grade2); }
+  .g1 .grade-header-line { background: var(--grade1); }
+
+  /* ── Member Row ── */
+  .member-row {
+    display: flex; height: var(--row-h); border-bottom: 1px solid var(--border);
+    position: relative;
+  }
+  .member-row:hover .row-bg { background: rgba(255,255,255,.02); }
+
+  .member-label {
+    width: var(--label-w); flex-shrink: 0;
+    display: flex; align-items: center; gap: 8px;
+    padding: 0 12px; border-right: 1px solid var(--border);
+    position: sticky; left: 0; z-index: 10;
+    background: var(--bg); cursor: pointer;
+    user-select: none;
+  }
+  .member-label:hover { background: var(--surface2); }
+  .member-avatar {
+    width: 28px; height: 28px; border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    font-size: .75rem; font-weight: 700; flex-shrink: 0;
+    color: #0f172a;
+  }
+  .member-name {
+    font-size: .85rem; font-weight: 500; overflow: hidden;
+    text-overflow: ellipsis; white-space: nowrap; flex: 1;
+  }
+
+  /* ── Row Grid & Shift Bars ── */
+  .row-grid {
+    flex: 1; position: relative; overflow: hidden; cursor: crosshair;
+  }
+  .row-bg {
+    position: absolute; inset: 0;
+    display: flex;
+  }
+  .row-cell {
+    width: var(--hour-w); flex-shrink: 0; height: 100%;
+    border-right: 1px solid rgba(51,65,85,.5);
+  }
+  .shift-bar {
+    position: absolute; top: 6px; height: calc(100% - 12px);
+    border-radius: 6px; display: flex; align-items: center;
+    padding: 0 8px; font-size: .75rem; font-weight: 600;
+    overflow: hidden; white-space: nowrap; cursor: pointer;
+    transition: opacity .15s, transform .1s;
+    z-index: 5; color: #0f172a;
+    box-shadow: 0 2px 8px rgba(0,0,0,.3);
+  }
+  .shift-bar:hover { opacity: .85; transform: scaleY(1.05); }
+  .shift-bar .shift-time { font-size: .7rem; font-weight: 500; opacity: .8; }
+  .drag-preview {
+    position: absolute; top: 6px; height: calc(100% - 12px);
+    border-radius: 6px; pointer-events: none; z-index: 20;
+    opacity: .65; border: 2px dashed rgba(255,255,255,.5);
+    display: flex; align-items: center; padding: 0 8px;
+    font-size: .75rem; font-weight: 600; color: #0f172a;
+  }
+
+  /* ── Current Time Line ── */
+  #now-line {
+    position: absolute; top: 0; bottom: 0; width: 2px;
+    background: var(--danger); z-index: 30; pointer-events: none;
+  }
+  #now-line::before {
+    content: ''; position: absolute; top: 0; left: -4px;
+    width: 10px; height: 10px; background: var(--danger);
+    border-radius: 50%;
+  }
+
+  /* ── Modals ── */
+  .modal-overlay {
+    position: fixed; inset: 0; background: rgba(0,0,0,.7);
+    display: flex; align-items: center; justify-content: center;
+    z-index: 200;
+  }
+  .modal-overlay.hidden { display: none; }
+  .modal-box {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 14px; padding: 28px; width: min(400px, 94vw);
+    box-shadow: 0 20px 60px rgba(0,0,0,.5);
+  }
+  .modal-box h3 { font-size: 1.1rem; margin-bottom: 20px; }
+  .form-row { display: flex; flex-direction: column; gap: 6px; margin-bottom: 14px; }
+  .form-row label { font-size: .82rem; color: var(--text-muted); }
+  .form-row input, .form-row select {
+    background: var(--bg); border: 1px solid var(--border);
+    border-radius: 8px; padding: 9px 12px; color: var(--text);
+    font-size: .9rem; outline: none; width: 100%;
+  }
+  .form-row input:focus, .form-row select:focus { border-color: var(--accent); }
+  .form-row input[type=color] { padding: 4px; height: 40px; cursor: pointer; }
+  .modal-actions { display: flex; gap: 10px; margin-top: 20px; }
+  .btn { padding: 9px 18px; border-radius: 8px; border: none; cursor: pointer; font-size: .9rem; font-weight: 600; }
+  .btn-primary { background: var(--accent); color: #fff; }
+  .btn-primary:hover { opacity: .9; }
+  .btn-danger { background: var(--danger); color: #fff; }
+  .btn-danger:hover { opacity: .9; }
+  .btn-ghost { background: var(--surface2); color: var(--text); border: 1px solid var(--border); }
+  .btn-ghost:hover { background: var(--border); }
+
+  /* ── Member Panel (sidebar) ── */
+  #member-panel {
+    position: fixed; right: 0; top: var(--header-h); bottom: 0;
+    width: 280px; background: var(--surface);
+    border-left: 1px solid var(--border);
+    display: flex; flex-direction: column; z-index: 80;
+    transform: translateX(100%); transition: transform .25s ease;
+  }
+  #member-panel.open { transform: translateX(0); }
+  #member-panel h3 {
+    padding: 18px 16px 14px; font-size: 1rem; font-weight: 700;
+    border-bottom: 1px solid var(--border); display: flex;
+    align-items: center; justify-content: space-between;
+  }
+  #member-list { flex: 1; overflow-y: auto; padding: 12px; display: flex; flex-direction: column; gap: 6px; }
+  .member-card {
+    background: var(--bg); border: 1px solid var(--border); border-radius: 10px;
+    padding: 10px 12px; display: flex; align-items: center; gap: 10px;
+  }
+  .member-card-info { flex: 1; min-width: 0; }
+  .member-card-name { font-size: .9rem; font-weight: 500; }
+  .member-card-grade { font-size: .78rem; color: var(--text-muted); }
+  .member-card-actions { display: flex; gap: 6px; }
+  .small-btn {
+    width: 28px; height: 28px; border-radius: 6px; border: 1px solid var(--border);
+    background: var(--surface2); color: var(--text); display: flex;
+    align-items: center; justify-content: center; cursor: pointer; font-size: .85rem;
+  }
+  .small-btn:hover { background: var(--border); }
+  #add-member-btn {
+    margin: 12px; padding: 10px; background: rgba(99,102,241,.15);
+    border: 1px dashed var(--accent); border-radius: 10px;
+    color: var(--accent); cursor: pointer; text-align: center;
+    font-size: .9rem; font-weight: 600;
+  }
+  #add-member-btn:hover { background: rgba(99,102,241,.25); }
+
+  /* ── Shift Detail Popup ── */
+  #shift-popup {
+    position: fixed; background: var(--surface);
+    border: 1px solid var(--border); border-radius: 12px;
+    padding: 16px; min-width: 200px; z-index: 150;
+    box-shadow: 0 12px 40px rgba(0,0,0,.5);
+    display: none;
+  }
+  #shift-popup.visible { display: block; }
+  #shift-popup h4 { font-size: .95rem; margin-bottom: 12px; }
+  #shift-popup .popup-time { font-size: .85rem; color: var(--text-muted); margin-bottom: 12px; }
+  #shift-popup .popup-actions { display: flex; gap: 8px; }
+
+  /* ── Toast ── */
+  #toast {
+    position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%);
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 10px; padding: 10px 20px; font-size: .9rem;
+    box-shadow: 0 8px 32px rgba(0,0,0,.4); z-index: 300;
+    opacity: 0; transition: opacity .3s; pointer-events: none;
+  }
+  #toast.show { opacity: 1; }
+
+  /* ── Sync indicator ── */
+  #sync-dot {
+    width: 8px; height: 8px; border-radius: 50%;
+    background: var(--success); flex-shrink: 0;
+  }
+  #sync-dot.error { background: var(--danger); }
+  #sync-dot.connecting { background: #facc15; animation: pulse .8s infinite; }
+  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.3} }
+
+  /* ── Responsive ── */
+  @media (max-width: 600px) {
+    :root { --label-w: 110px; --hour-w: 54px; --row-h: 40px; }
+    #topbar h1 { font-size: .9rem; }
+    #date-display { font-size: .85rem; min-width: 120px; }
+  }
+</style>
+</head>
+<body>
+
+<!-- Setup Modal -->
+<div id="setup-overlay">
+  <div class="setup-box">
+    <h2>🎯 Supabase 接続設定</h2>
+    <p>シフトをリアルタイムで同期するためにSupabaseの設定が必要です。<br>初回のみ入力してください（ブラウザに保存されます）。</p>
+    <label>Supabase URL</label>
+    <input id="setup-url" type="text" placeholder="https://xxxxxxxxxxxxxxxx.supabase.co" />
+    <label>Supabase Anon Key</label>
+    <input id="setup-key" type="text" placeholder="eyJhbGci..." />
+    <button class="btn-primary" onclick="saveSetup()">接続する</button>
+    <div class="setup-note">
+      💡 <strong>設定方法：</strong>supabase.com → プロジェクト → Settings → API から URL と anon key をコピーしてください。<br><br>
+      📋 <strong>DBスキーマ：</strong>同梱の <code>schema.sql</code> を Supabase の SQL Editor で実行してください。
+    </div>
+  </div>
+</div>
+
+<!-- Top Bar -->
+<div id="topbar">
+  <h1>📅 シフトスケジューラー</h1>
+  <div id="sync-dot" class="connecting"></div>
+  <div class="spacer"></div>
+  <button class="nav-btn" onclick="prevDay()">‹ 前日</button>
+  <span id="date-display"></span>
+  <button class="nav-btn" onclick="nextDay()">翌日 ›</button>
+  <button class="today-btn" onclick="goToday()">今日</button>
+  <button class="icon-btn" onclick="toggleMemberPanel()" title="メンバー管理">👥</button>
+  <button class="icon-btn" onclick="resetSetup()" title="設定リセット">⚙️</button>
+</div>
+
+<!-- Main -->
+<div id="main">
+  <div id="gantt-wrapper">
+    <div id="gantt"></div>
+  </div>
+</div>
+
+<!-- Member Panel -->
+<div id="member-panel">
+  <h3>メンバー管理 <span class="small-btn" onclick="toggleMemberPanel()">✕</span></h3>
+  <div id="member-list"></div>
+  <div id="add-member-btn" onclick="openAddMember()">＋ メンバーを追加</div>
+</div>
+
+<!-- Add/Edit Member Modal -->
+<div class="modal-overlay hidden" id="member-modal">
+  <div class="modal-box">
+    <h3 id="member-modal-title">メンバーを追加</h3>
+    <div class="form-row">
+      <label>名前</label>
+      <input id="m-name" type="text" placeholder="例: 田中 太郎" />
+    </div>
+    <div class="form-row">
+      <label>学年</label>
+      <select id="m-grade">
+        <option value="4">4年生</option>
+        <option value="3">3年生</option>
+        <option value="2">2年生</option>
+        <option value="1" selected>1年生</option>
+      </select>
+    </div>
+    <div class="form-row">
+      <label>カラー</label>
+      <input id="m-color" type="color" value="#6366f1" />
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-primary" onclick="saveMember()">保存</button>
+      <button class="btn btn-ghost" onclick="closeMemberModal()">キャンセル</button>
+      <button class="btn btn-danger" id="delete-member-btn" style="display:none" onclick="deleteMember()">削除</button>
+    </div>
+  </div>
+</div>
+
+<!-- Shift Detail Popup -->
+<div id="shift-popup">
+  <h4 id="popup-name"></h4>
+  <div class="popup-time" id="popup-time"></div>
+  <div class="form-row">
+    <label>メモ</label>
+    <input id="popup-note" type="text" placeholder="メモを追加..." />
+  </div>
+  <div class="popup-actions">
+    <button class="btn btn-primary" onclick="saveShiftNote()" style="font-size:.82rem;padding:6px 14px">保存</button>
+    <button class="btn btn-danger" onclick="deleteShift()" style="font-size:.82rem;padding:6px 14px">削除</button>
+    <button class="btn btn-ghost" onclick="closePopup()" style="font-size:.82rem;padding:6px 14px">閉じる</button>
+  </div>
+</div>
+
+<!-- Toast -->
+<div id="toast"></div>
+
+<script>
+const GRADE_COLORS = { 4: '#818cf8', 3: '#34d399', 2: '#fb923c', 1: '#fbbf24' };
+const GRADE_LABELS = { 4: '4年生', 3: '3年生', 2: '2年生', 1: '1年生' };
+
+let supabaseClient = null;
+let currentDate = new Date();
+currentDate.setHours(0,0,0,0);
+let members = [], shifts = [];
+let editingMemberId = null, activeShiftId = null, dragState = null;
+let realtimeChannel = null;
+
+function saveSetup() {
+  const url = document.getElementById('setup-url').value.trim();
+  const key = document.getElementById('setup-key').value.trim();
+  if (!url || !key) { showToast('URLとKeyを入力してください'); return; }
+  localStorage.setItem('sb_url', url);
+  localStorage.setItem('sb_key', key);
+  document.getElementById('setup-overlay').classList.add('hidden');
+  initSupabase(url, key);
+}
+function resetSetup() {
+  if (!confirm('設定をリセットしますか？')) return;
+  localStorage.removeItem('sb_url');
+  localStorage.removeItem('sb_key');
+  location.reload();
+}
+function initSupabase(url, key) {
+  supabaseClient = supabase.createClient(url, key);
+  setSyncStatus('connecting');
+  loadData();
+  setupRealtime();
+}
+function setSyncStatus(s) {
+  const dot = document.getElementById('sync-dot');
+  dot.className = s === 'ok' ? '' : s;
+  dot.style.background = s === 'ok' ? 'var(--success)' : s === 'error' ? 'var(--danger)' : '#facc15';
+}
+
+async function loadData() {
+  try {
+    const [mRes, sRes] = await Promise.all([
+      supabaseClient.from('members').select('*').order('grade', { ascending: false }).order('name'),
+      supabaseClient.from('shifts').select('*').eq('date', formatDate(currentDate))
+    ]);
+    if (mRes.error) throw mRes.error;
+    if (sRes.error) throw sRes.error;
+    members = mRes.data;
+    shifts = sRes.data;
+    setSyncStatus('ok');
+    renderGantt();
+    renderMemberList();
+  } catch(e) {
+    setSyncStatus('error');
+    showToast('データ取得エラー: ' + e.message);
+  }
+}
+
+function setupRealtime() {
+  if (realtimeChannel) supabaseClient.removeChannel(realtimeChannel);
+  realtimeChannel = supabaseClient.channel('public:all')
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'shifts' }, handleRealtimeShift)
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'members' }, () => loadData())
+    .subscribe(s => { if (s === 'SUBSCRIBED') setSyncStatus('ok'); else if (s === 'CHANNEL_ERROR') setSyncStatus('error'); });
+}
+
+function handleRealtimeShift(payload) {
+  const dateStr = formatDate(currentDate);
+  if (payload.eventType === 'INSERT') {
+    if (payload.new.date === dateStr) { shifts.push(payload.new); renderGantt(); }
+  } else if (payload.eventType === 'UPDATE') {
+    const idx = shifts.findIndex(s => s.id === payload.new.id);
+    if (idx >= 0) shifts[idx] = payload.new;
+    else if (payload.new.date === dateStr) shifts.push(payload.new);
+    renderGantt();
+  } else if (payload.eventType === 'DELETE') {
+    shifts = shifts.filter(s => s.id !== payload.old.id);
+    renderGantt();
+  }
+}
+
+function renderGantt() {
+  const gantt = document.getElementById('gantt');
+  const hourW = getHourWidth();
+  gantt.innerHTML = '';
+
+  // Time header
+  const header = document.createElement('div');
+  header.id = 'time-header';
+  const spacer = document.createElement('div');
+  spacer.className = 'time-label-spacer';
+  header.appendChild(spacer);
+  const slots = document.createElement('div');
+  slots.className = 'time-slots';
+  for (let h = 0; h <= 24; h++) {
+    const s = document.createElement('div');
+    s.className = 'time-slot' + (h === 0 || h === 24 ? ' midnight' : '');
+    s.textContent = h === 24 ? '24:00' : `${String(h).padStart(2,'0')}:00`;
+    slots.appendChild(s);
+  }
+  header.appendChild(slots);
+  gantt.appendChild(header);
+
+  [4,3,2,1].forEach(grade => {
+    const gradeMembers = members.filter(m => m.grade === grade);
+    if (!gradeMembers.length) return;
+    const group = document.createElement('div');
+    group.className = `grade-group g${grade}`;
+    const gh = document.createElement('div');
+    gh.className = 'grade-header';
+    const ghl = document.createElement('div');
+    ghl.className = 'grade-header-label';
+    ghl.textContent = GRADE_LABELS[grade];
+    const line = document.createElement('div');
+    line.className = 'grade-header-line';
+    gh.appendChild(ghl);
+    gh.appendChild(line);
+    group.appendChild(gh);
+    gradeMembers.forEach(member => {
+      group.appendChild(buildMemberRow(member, shifts.filter(s => s.member_id === member.id), hourW));
+    });
+    gantt.appendChild(group);
+  });
+
+  updateNowLine();
+}
+
+function buildMemberRow(member, memberShifts, hourW) {
+  const row = document.createElement('div');
+  row.className = 'member-row';
+  const label = document.createElement('div');
+  label.className = 'member-label';
+  const avatar = document.createElement('div');
+  avatar.className = 'member-avatar';
+  avatar.style.background = member.color || GRADE_COLORS[member.grade];
+  avatar.textContent = member.name.charAt(0);
+  const nameEl = document.createElement('div');
+  nameEl.className = 'member-name';
+  nameEl.textContent = member.name;
+  label.appendChild(avatar);
+  label.appendChild(nameEl);
+  label.addEventListener('click', () => openEditMember(member));
+  row.appendChild(label);
+
+  const grid = document.createElement('div');
+  grid.className = 'row-grid';
+  const bg = document.createElement('div');
+  bg.className = 'row-bg';
+  for (let h = 0; h < 24; h++) {
+    const cell = document.createElement('div');
+    cell.className = 'row-cell';
+    bg.appendChild(cell);
+  }
+  grid.appendChild(bg);
+  memberShifts.forEach(shift => grid.appendChild(buildShiftBar(shift, member, hourW)));
+  setupDrag(grid, member, hourW);
+  row.appendChild(grid);
+  return row;
+}
+
+function buildShiftBar(shift, member, hourW) {
+  const bar = document.createElement('div');
+  bar.className = 'shift-bar';
+  bar.dataset.shiftId = shift.id;
+  bar.style.background = member.color || GRADE_COLORS[member.grade];
+  bar.style.left = (shift.start_minutes / 60) * hourW + 'px';
+  bar.style.width = Math.max(((shift.end_minutes - shift.start_minutes) / 60) * hourW, 8) + 'px';
+  const label = document.createElement('span');
+  label.className = 'shift-time';
+  label.textContent = `${minsToTime(shift.start_minutes)}–${minsToTime(shift.end_minutes)}`;
+  bar.appendChild(label);
+  if (shift.note) {
+    const note = document.createElement('span');
+    note.textContent = ' ' + shift.note;
+    note.style.marginLeft = '4px';
+    bar.appendChild(note);
+  }
+  bar.addEventListener('click', e => { e.stopPropagation(); showShiftPopup(shift, member, e); });
+  return bar;
+}
+
+function setupDrag(grid, member, hourW) {
+  let preview = null;
+
+  const startDrag = (x) => {
+    const startMin = snapMinutes(xToMinutes(x, hourW));
+    dragState = { member, startMin, currentMin: startMin, grid };
+    preview = document.createElement('div');
+    preview.className = 'drag-preview';
+    preview.style.background = member.color || GRADE_COLORS[member.grade];
+    grid.appendChild(preview);
+    updatePreview(preview, startMin, startMin, hourW);
+  };
+  const moveDrag = (x) => {
+    if (!dragState || dragState.grid !== grid) return;
+    dragState.currentMin = snapMinutes(xToMinutes(x, hourW));
+    if (preview) updatePreview(preview, dragState.startMin, dragState.currentMin, hourW);
+  };
+  const endDrag = async () => {
+    if (!dragState || dragState.grid !== grid) return;
+    let s = dragState.startMin, e = dragState.currentMin;
+    if (preview) preview.remove();
+    preview = null;
+    dragState = null;
+    if (e < s) [s, e] = [e, s];
+    if (e - s >= 15) await createShift(member.id, s, e);
+  };
+
+  grid.addEventListener('mousedown', e => { if (!e.target.classList.contains('shift-bar') && e.button === 0) { e.preventDefault(); startDrag(getRelativeX(e, grid)); } });
+  document.addEventListener('mousemove', e => { if (dragState?.grid === grid) moveDrag(getRelativeX(e, grid)); });
+  document.addEventListener('mouseup', e => { if (dragState?.grid === grid) endDrag(); });
+  grid.addEventListener('touchstart', e => { if (!e.target.classList.contains('shift-bar')) startDrag(getRelativeX(e.touches[0], grid)); }, { passive: true });
+  grid.addEventListener('touchmove', e => moveDrag(getRelativeX(e.touches[0], grid)), { passive: true });
+  grid.addEventListener('touchend', endDrag);
+}
+
+function updatePreview(el, s, e, hourW) {
+  if (e < s) [s, e] = [e, s];
+  el.style.left = (s / 60) * hourW + 'px';
+  el.style.width = Math.max(((e - s) / 60) * hourW, 4) + 'px';
+  el.textContent = `${minsToTime(s)}–${minsToTime(e)}`;
+}
+
+function getRelativeX(e, el) {
+  return (e.clientX ?? e.pageX) - el.getBoundingClientRect().left;
+}
+function xToMinutes(x, hourW) { return Math.round((x / hourW) * 60); }
+function snapMinutes(m) { return Math.max(0, Math.min(1440, Math.round(m / 15) * 15)); }
+function getHourWidth() { return parseInt(getComputedStyle(document.documentElement).getPropertyValue('--hour-w')) || 72; }
+
+async function createShift(memberId, startMin, endMin) {
+  try {
+    const { error } = await supabaseClient.from('shifts').insert({ member_id: memberId, date: formatDate(currentDate), start_minutes: startMin, end_minutes: endMin, note: '' });
+    if (error) throw error;
+    showToast('シフトを追加しました ✓');
+  } catch(e) { showToast('エラー: ' + e.message); }
+}
+
+async function deleteShift() {
+  if (!activeShiftId) return;
+  try {
+    const { error } = await supabaseClient.from('shifts').delete().eq('id', activeShiftId);
+    if (error) throw error;
+    closePopup();
+    showToast('シフトを削除しました');
+  } catch(e) { showToast('エラー: ' + e.message); }
+}
+
+async function saveShiftNote() {
+  if (!activeShiftId) return;
+  try {
+    const { error } = await supabaseClient.from('shifts').update({ note: document.getElementById('popup-note').value }).eq('id', activeShiftId);
+    if (error) throw error;
+    closePopup();
+    showToast('保存しました ✓');
+  } catch(e) { showToast('エラー: ' + e.message); }
+}
+
+async function saveMember() {
+  const name = document.getElementById('m-name').value.trim();
+  const grade = parseInt(document.getElementById('m-grade').value);
+  const color = document.getElementById('m-color').value;
+  if (!name) { showToast('名前を入力してください'); return; }
+  try {
+    const { error } = editingMemberId
+      ? await supabaseClient.from('members').update({ name, grade, color }).eq('id', editingMemberId)
+      : await supabaseClient.from('members').insert({ name, grade, color });
+    if (error) throw error;
+    closeMemberModal();
+    showToast(editingMemberId ? '更新しました ✓' : 'メンバーを追加しました ✓');
+  } catch(e) { showToast('エラー: ' + e.message); }
+}
+
+async function deleteMember() {
+  if (!editingMemberId || !confirm('このメンバーとシフトをすべて削除しますか？')) return;
+  try {
+    const { error } = await supabaseClient.from('members').delete().eq('id', editingMemberId);
+    if (error) throw error;
+    closeMemberModal();
+    showToast('削除しました');
+  } catch(e) { showToast('エラー: ' + e.message); }
+}
+
+function showShiftPopup(shift, member, e) {
+  activeShiftId = shift.id;
+  document.getElementById('popup-name').textContent = member.name;
+  document.getElementById('popup-time').textContent = `${minsToTime(shift.start_minutes)} 〜 ${minsToTime(shift.end_minutes)}`;
+  document.getElementById('popup-note').value = shift.note || '';
+  const popup = document.getElementById('shift-popup');
+  popup.classList.add('visible');
+  let x = e.clientX + 12, y = e.clientY + 12;
+  if (x + 220 > window.innerWidth) x = e.clientX - 232;
+  if (y + 160 > window.innerHeight) y = e.clientY - 172;
+  popup.style.left = x + 'px';
+  popup.style.top = y + 'px';
+}
+function closePopup() { document.getElementById('shift-popup').classList.remove('visible'); activeShiftId = null; }
+document.addEventListener('click', e => { if (!document.getElementById('shift-popup').contains(e.target)) closePopup(); });
+
+function openAddMember() {
+  editingMemberId = null;
+  document.getElementById('member-modal-title').textContent = 'メンバーを追加';
+  document.getElementById('m-name').value = '';
+  document.getElementById('m-grade').value = '1';
+  document.getElementById('m-color').value = '#fbbf24';
+  document.getElementById('delete-member-btn').style.display = 'none';
+  document.getElementById('member-modal').classList.remove('hidden');
+}
+function openEditMember(member) {
+  editingMemberId = member.id;
+  document.getElementById('member-modal-title').textContent = 'メンバーを編集';
+  document.getElementById('m-name').value = member.name;
+  document.getElementById('m-grade').value = member.grade;
+  document.getElementById('m-color').value = member.color || GRADE_COLORS[member.grade];
+  document.getElementById('delete-member-btn').style.display = '';
+  document.getElementById('member-modal').classList.remove('hidden');
+}
+function closeMemberModal() { document.getElementById('member-modal').classList.add('hidden'); }
+
+function renderMemberList() {
+  const list = document.getElementById('member-list');
+  list.innerHTML = '';
+  [4,3,2,1].forEach(grade => {
+    const gm = members.filter(m => m.grade === grade);
+    if (!gm.length) return;
+    const gh = document.createElement('div');
+    gh.style.cssText = `font-size:.75rem;color:${GRADE_COLORS[grade]};font-weight:700;padding:6px 4px 4px;letter-spacing:.06em`;
+    gh.textContent = GRADE_LABELS[grade].toUpperCase();
+    list.appendChild(gh);
+    gm.forEach(m => {
+      const card = document.createElement('div');
+      card.className = 'member-card';
+      card.innerHTML = `
+        <div style="width:32px;height:32px;border-radius:50%;background:${m.color||GRADE_COLORS[m.grade]};display:flex;align-items:center;justify-content:center;font-size:.8rem;font-weight:700;color:#0f172a;flex-shrink:0">${m.name.charAt(0)}</div>
+        <div class="member-card-info"><div class="member-card-name">${m.name}</div><div class="member-card-grade">${GRADE_LABELS[m.grade]}</div></div>
+        <div class="small-btn" onclick='openEditMember(${JSON.stringify(m)})'>✎</div>
+      `;
+      list.appendChild(card);
+    });
+  });
+}
+function toggleMemberPanel() { document.getElementById('member-panel').classList.toggle('open'); }
+
+function updateDateDisplay() {
+  const days = ['日','月','火','水','木','金','土'];
+  document.getElementById('date-display').textContent =
+    `${currentDate.getFullYear()}年${currentDate.getMonth()+1}月${currentDate.getDate()}日（${days[currentDate.getDay()]}）`;
+}
+function prevDay() { currentDate.setDate(currentDate.getDate()-1); updateDateDisplay(); loadData(); }
+function nextDay() { currentDate.setDate(currentDate.getDate()+1); updateDateDisplay(); loadData(); }
+function goToday() { currentDate = new Date(); currentDate.setHours(0,0,0,0); updateDateDisplay(); loadData(); }
+
+function updateNowLine() {
+  const old = document.getElementById('now-line');
+  if (old) old.remove();
+  const today = new Date(); today.setHours(0,0,0,0);
+  if (formatDate(currentDate) !== formatDate(today)) return;
+  const now = new Date();
+  const hourW = getHourWidth();
+  const labelW = parseInt(getComputedStyle(document.documentElement).getPropertyValue('--label-w'));
+  const line = document.createElement('div');
+  line.id = 'now-line';
+  line.style.left = (labelW + ((now.getHours()*60+now.getMinutes())/60)*hourW) + 'px';
+  document.getElementById('gantt').style.position = 'relative';
+  document.getElementById('gantt').appendChild(line);
+}
+
+function formatDate(d) { return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`; }
+function minsToTime(m) { return `${String(Math.floor(m/60)).padStart(2,'0')}:${String(m%60).padStart(2,'0')}`; }
+function showToast(msg) { const t = document.getElementById('toast'); t.textContent = msg; t.classList.add('show'); setTimeout(() => t.classList.remove('show'), 2500); }
+
+document.addEventListener('keydown', e => {
+  if (e.key === 'ArrowLeft') prevDay();
+  if (e.key === 'ArrowRight') nextDay();
+  if (e.key === 'Escape') { closePopup(); closeMemberModal(); }
+});
+
+(function init() {
+  updateDateDisplay();
+  const url = localStorage.getItem('sb_url'), key = localStorage.getItem('sb_key');
+  if (url && key) { document.getElementById('setup-overlay').classList.add('hidden'); initSupabase(url, key); }
+  setInterval(updateNowLine, 60000);
+})();
+</script>
+</body>
+</html>
