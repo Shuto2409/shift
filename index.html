@@ -343,22 +343,7 @@
 </head>
 <body>
 
-<!-- Setup Modal -->
-<div id="setup-overlay">
-  <div class="setup-box">
-    <h2>🎯 Supabase 接続設定</h2>
-    <p>シフトをリアルタイムで同期するためにSupabaseの設定が必要です。<br>初回のみ入力してください（ブラウザに保存されます）。</p>
-    <label>Supabase URL</label>
-    <input id="setup-url" type="text" placeholder="https://xxxxxxxxxxxxxxxx.supabase.co" />
-    <label>Supabase Anon Key</label>
-    <input id="setup-key" type="text" placeholder="eyJhbGci..." />
-    <button class="btn-primary" onclick="saveSetup()">接続する</button>
-    <div class="setup-note">
-      💡 <strong>設定方法：</strong>supabase.com → プロジェクト → Settings → API から URL と anon key をコピーしてください。<br><br>
-      📋 <strong>DBスキーマ：</strong>同梱の <code>schema.sql</code> を Supabase の SQL Editor で実行してください。
-    </div>
-  </div>
-</div>
+<!-- Setup Modal (非表示) -->
 
 <!-- Top Bar -->
 <div id="topbar">
@@ -445,21 +430,11 @@ let members = [], shifts = [];
 let editingMemberId = null, activeShiftId = null, dragState = null;
 let realtimeChannel = null;
 
-function saveSetup() {
-  const url = document.getElementById('setup-url').value.trim();
-  const key = document.getElementById('setup-key').value.trim();
-  if (!url || !key) { showToast('URLとKeyを入力してください'); return; }
-  localStorage.setItem('sb_url', url);
-  localStorage.setItem('sb_key', key);
-  document.getElementById('setup-overlay').classList.add('hidden');
-  initSupabase(url, key);
-}
-function resetSetup() {
-  if (!confirm('設定をリセットしますか？')) return;
-  localStorage.removeItem('sb_url');
-  localStorage.removeItem('sb_key');
-  location.reload();
-}
+const SUPABASE_URL = 'https://abpqnypoqxnphkdssibm.supabase.co';
+const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImFicHFueXBvcXhucGhrZHNzaWJtIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzk0NzQ4OTIsImV4cCI6MjA5NTA1MDg5Mn0.t3cHVWmwHOggCabSsFGNsontegRr4SOI5CZjyeflAYk';
+
+function saveSetup() {}
+function resetSetup() {}
 function initSupabase(url, key) {
   supabaseClient = supabase.createClient(url, key);
   setSyncStatus('connecting');
@@ -812,8 +787,7 @@ document.addEventListener('keydown', e => {
 
 (function init() {
   updateDateDisplay();
-  const url = localStorage.getItem('sb_url'), key = localStorage.getItem('sb_key');
-  if (url && key) { document.getElementById('setup-overlay').classList.add('hidden'); initSupabase(url, key); }
+  initSupabase(SUPABASE_URL, SUPABASE_KEY);
   setInterval(updateNowLine, 60000);
 })();
 </script>
